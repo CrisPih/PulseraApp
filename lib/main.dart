@@ -1,28 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Modelo para el JSON recibido del ESP32 (simulado en Wokwi)
-class HeartData {
-  final int hr;
-  final double batt;
-  final int ts;
-  HeartData({required this.hr, required this.batt, required this.ts});
+import 'models.dart';
+import 'storage.dart';
+import 'contacts_page.dart';
+import 'history_page.dart';
+import 'settings_page.dart';
 
-  factory HeartData.fromJson(String jsonStr) {
-    final map = jsonDecode(jsonStr) as Map<String, dynamic>;
-    return HeartData(
-      hr: (map['hr'] as num?)?.toInt() ?? 0,
-      batt: (map['batt'] as num?)?.toDouble() ?? 0.0,
-      ts: (map['ts'] as num?)?.toInt() ?? 0,
-    );
-  }
-}
-
-/// Servicio MQTT simple
 class MqttService {
   final String server;
   final int port;
@@ -32,53 +20,36 @@ class MqttService {
   final _controller = StreamController<HeartData>.broadcast();
   Stream<HeartData> get stream => _controller.stream;
 
-  MqttService({
-    required this.server,
-    required this.port,
-    required this.topic,
-  }) {
-    final clientId =
-        'flutter-${DateTime.now().millisecondsSinceEpoch}-${DateTime.now().microsecondsSinceEpoch}';
-
-    _client = MqttServerClient(server, clientId);
-    _client.port = port;
-    _client.logging(on: false);
-    _client.keepAlivePeriod = 30;
-    _client.autoReconnect = true;
-
-    // Callbacks (asignados fuera de la cascada)
-    _client.onConnected = _onConnected;
-    _client.onDisconnected = _onDisconnected;
-    _client.onSubscribed = _onSubscribed;
+  MqttService({required this.server, required this.port, required this.topic}) {
+    final clientId = 'flutter-${DateTime.now().microsecondsSinceEpoch}';
+    _client = MqttServerClient(server, clientId)
+      ..port = port
+      ..logging(on: false)
+      ..keepAlivePeriod = 30
+      ..autoReconnect = true;
+    _client.onConnected = () => debugPrint('MQTT conectado');
+    _client.onDisconnected = () => debugPrint('MQTT desconectado');
+    _client.onSubscribed = (t) => debugPrint('Suscrito a $t');
   }
-
-  void _onConnected() => debugPrint('MQTT conectado');
-  void _onDisconnected() => debugPrint('MQTT desconectado');
-  void _onSubscribed(String topic) => debugPrint('Suscrito a $topic');
-
 
   Future<void> connect() async {
     _client.connectionMessage = MqttConnectMessage()
         .startClean()
         .withWillQos(MqttQos.atLeastOnce)
         .keepAliveFor(30);
-
     try {
       await _client.connect();
     } catch (e) {
       _client.disconnect();
       rethrow;
     }
-
     _client.subscribe(topic, MqttQos.atMostOnce);
-
     _client.updates?.listen((events) {
       final rec = events.first;
       final recMess = rec.payload as MqttPublishMessage;
-      final payload =
-          MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+      final payload = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
       try {
-        final data = HeartData.fromJson(payload);
+        final data = HeartData.fromJsonStr(payload);
         _controller.add(data);
       } catch (e) {
         debugPrint('Error parseando JSON: $e | payload=$payload');
@@ -92,12 +63,18 @@ class MqttService {
   }
 }
 
-void main() {
-  runApp(const HeartGuardApp());
+void main() => runApp(const HeartGuardApp());
+
+class HeartGuardApp extends StatefulWidget {
+  const HeartGuardApp({super.key});
+  @override
+  State<HeartGuardApp> createState() => _HeartGuardAppState();
 }
 
-class HeartGuardApp extends StatelessWidget {
-  const HeartGuardApp({super.key});
+class _HeartGuardAppState extends State<HeartGuardApp> {
+  int _idx = 0;
+  final pages = const [MonitorPage(), HistoryPage(), ContactsPage(), SettingsPage()];
+  final titles = const ['Monitor', 'Historial', 'Contactos', 'Ajustes'];
 
   @override
   Widget build(BuildContext context) {
@@ -107,7 +84,20 @@ class HeartGuardApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
         useMaterial3: true,
       ),
-      home: const MonitorPage(),
+      home: Scaffold(
+        appBar: AppBar(title: Text('HeartGuard — ${titles[_idx]}')),
+        body: pages[_idx],
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _idx,
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.monitor_heart_outlined), label: 'Monitor'),
+            NavigationDestination(icon: Icon(Icons.show_chart), label: 'Historial'),
+            NavigationDestination(icon: Icon(Icons.group_outlined), label: 'Contactos'),
+            NavigationDestination(icon: Icon(Icons.settings), label: 'Ajustes'),
+          ],
+          onDestinationSelected: (i) => setState(() => _idx = i),
+        ),
+      ),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -115,13 +105,11 @@ class HeartGuardApp extends StatelessWidget {
 
 class MonitorPage extends StatefulWidget {
   const MonitorPage({super.key});
-
   @override
   State<MonitorPage> createState() => _MonitorPageState();
 }
 
 class _MonitorPageState extends State<MonitorPage> {
-  // Ajusta estos para que coincidan con tu simulación Wokwi
   final String broker = 'test.mosquitto.org';
   final int port = 1883;
   final String topic = 'bracelet/demo2/hr';
@@ -131,10 +119,13 @@ class _MonitorPageState extends State<MonitorPage> {
 
   HeartData? last;
   String status = 'Conectando...';
-  int sustainedHighSeconds = 0;
-  int? baseline; // se fija con el 1er dato (simple para demo)
-  final int tachyThreshold = 130; // umbral alto
-  final int spikeDelta = 35; // salto súbito (vs baseline) que dispara alerta
+
+  // Detección
+  Settings s = Settings.defaults();
+  int sustain = 0;
+  double? ema;                // baseline con media móvil
+  final alpha = 0.1;          // suavizado EMA
+  bool simulateCrisis = false;
 
   @override
   void initState() {
@@ -146,39 +137,61 @@ class _MonitorPageState extends State<MonitorPage> {
     }).catchError((e) {
       setState(() => status = 'Error de conexión: $e');
     });
+    _loadSettings();
   }
 
-  void _onData(HeartData data) {
-    setState(() {
-      last = data;
-      baseline ??= data.hr;
+  Future<void> _loadSettings() async {
+    s = await Storage.loadSettings();
+    setState(() {});
+  }
 
-      final isTachy = data.hr >= tachyThreshold;
-      final isSpike = (baseline != null) && (data.hr - baseline! >= spikeDelta);
+  Future<void> _onData(HeartData data) async {
+    // Guardar para historial
+    await Storage.appendReading(data);
 
-      if (isTachy || isSpike) {
-        sustainedHighSeconds += 1; // publicas cada 1 s en Wokwi
-        if (sustainedHighSeconds >= 5) {
-          _sendAlert(hr: data.hr);
-          sustainedHighSeconds = 0; // evita spam
-        }
-      } else {
-        sustainedHighSeconds = 0;
+    // EMA baseline
+    ema = (ema == null) ? data.hr.toDouble() : (alpha * data.hr + (1 - alpha) * ema!);
+
+    final hrAdj = simulateCrisis ? (data.hr + 40) : data.hr; // simulación local
+    final isTachy = hrAdj >= s.tachyThreshold;
+    final isSpike = (ema != null) && ((hrAdj - ema!) >= s.spikeDelta);
+
+    if (isTachy || isSpike) {
+      sustain += 1; // asumiendo 1 lectura/segundo
+      if (sustain >= s.sustainSeconds) {
+        await _sendAlert(hr: hrAdj);
+        sustain = 0;
       }
-    });
+    } else {
+      sustain = 0;
+    }
+
+    setState(() => last = HeartData(hr: hrAdj, batt: data.batt, ts: data.ts));
   }
 
   Future<void> _sendAlert({required int hr}) async {
-    final message =
-        'ALERTA: pulso alto ($hr bpm). Necesito ayuda. (Prototipo)';
-    final smsUri = Uri.parse('sms:?body=${Uri.encodeComponent(message)}');
-    if (await canLaunchUrl(smsUri)) {
-      await launchUrl(smsUri);
+    final contacts = await Storage.loadContacts();
+    final body = 'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
+    String recipients = '';
+    if (contacts.isNotEmpty) {
+      final phones = contacts.map((c) => c.phone.trim()).where((p) => p.isNotEmpty).toList();
+      if (phones.isNotEmpty) {
+        final sep = Platform.isIOS ? ';' : ','; // iOS usa ';' entre destinatarios
+        recipients = phones.join(sep);
+      }
     }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Alerta: se abrió SMS con el mensaje.')),
-    );
+    final uriStr = recipients.isEmpty
+        ? 'sms:?body=${Uri.encodeComponent(body)}'
+        : 'sms:$recipients?body=${Uri.encodeComponent(body)}';
+    final uri = Uri.parse(uriStr);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Se abrió Mensajes con la alerta.')));
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo abrir SMS.')));
+    }
   }
 
   @override
@@ -197,7 +210,7 @@ class _MonitorPageState extends State<MonitorPage> {
     Color hrColor;
     if (hr == null) {
       hrColor = Colors.grey;
-    } else if (hr >= tachyThreshold) {
+    } else if (hr >= s.tachyThreshold) {
       hrColor = Colors.red;
     } else if (hr >= 100) {
       hrColor = Colors.orange;
@@ -205,90 +218,75 @@ class _MonitorPageState extends State<MonitorPage> {
       hrColor = Colors.green;
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('HeartGuard – Demo MQTT'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Chip(
-              label: Text(
-                connected ? 'Conectado' : status,
-                style: const TextStyle(color: Colors.white),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Chip(
+                    label: Text(connected ? 'Conectado' : status, style: const TextStyle(color: Colors.white)),
+                    backgroundColor: connected ? Colors.green : Colors.grey,
+                  ),
+                  const Spacer(),
+                  SwitchListTile.adaptive(
+                    value: simulateCrisis,
+                    onChanged: (v) => setState(() => simulateCrisis = v),
+                    title: const Text('Simular crisis'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ],
               ),
-              backgroundColor: connected ? Colors.green : Colors.grey,
-            ),
-          )
-        ],
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Card(
-                  elevation: 2,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Frecuencia cardiaca',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          hr == null ? '--' : '$hr bpm',
-                          style: Theme.of(context)
-                              .textTheme
-                              .displayMedium
-                              ?.copyWith(color: hrColor, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.battery_full),
-                            const SizedBox(width: 8),
-                            Text('Batería (simulada): ${batt == null ? '--' : '${(batt * 100).toStringAsFixed(0)}%'}'),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Umbral alto: ≥ $tachyThreshold bpm · Spike: +$spikeDelta bpm vs. baseline',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
+              Card(
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      Text('Frecuencia cardiaca', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      Text(hr == null ? '--' : '$hr bpm',
+                          style: Theme.of(context).textTheme.displayMedium?.copyWith(color: hrColor, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 12),
+                      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                        const Icon(Icons.battery_full),
+                        const SizedBox(width: 8),
+                        Text('Batería (sim.): ${batt == null ? '--' : '${(batt * 100).toStringAsFixed(0)}%'}'),
+                      ]),
+                      const SizedBox(height: 8),
+                      Text('Umbral: ≥ ${s.tachyThreshold} bpm · Spike: +${s.spikeDelta} bpm vs baseline · Sostenido ${s.sustainSeconds}s',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        icon: const Icon(Icons.sms_failed_outlined),
-                        label: const Text('Enviar alerta ahora'),
-                        onPressed: hr == null ? null : () => _sendAlert(hr: hr),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'Tip: deja tu simulación Wokwi publicando en $topic hacia $broker:$port.\n'
-                      'Esta app se suscribe y procesa JSON como {"hr":78,"batt":0.72,"ts":123456}.',
-                      style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.sms_failed_outlined),
+                      label: const Text('Enviar alerta ahora'),
+                      onPressed: hr == null ? null : () => _sendAlert(hr: hr),
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'Tip: publica JSON {"hr":78,"batt":0.72,"ts":${DateTime.now().millisecondsSinceEpoch}} en $topic vía $broker:$port.\n'
+                    'La app guarda historial y calcula promedio diario/semanal.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
