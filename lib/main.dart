@@ -5,12 +5,11 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'models.dart';
-import 'storage.dart';
-import 'contacts_page.dart';
-import 'history_page.dart';
-import 'settings_page.dart';
-
+import 'package:heart_guard/models.dart';
+import 'package:heart_guard/storage.dart';
+import 'package:heart_guard/contacts_page.dart';
+import 'package:heart_guard/history_page.dart';
+import 'package:heart_guard/settings_page.dart';
 class MqttService {
   final String server;
   final int port;
@@ -35,8 +34,8 @@ class MqttService {
   Future<void> connect() async {
     _client.connectionMessage = MqttConnectMessage()
         .startClean()
-        .withWillQos(MqttQos.atLeastOnce)
-        .keepAliveFor(30);
+        .withWillQos(MqttQos.atLeastOnce);
+
     try {
       await _client.connect();
     } catch (e) {
