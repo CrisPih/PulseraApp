@@ -5,11 +5,12 @@ import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:heart_guard/models.dart';
-import 'package:heart_guard/storage.dart';
-import 'package:heart_guard/contacts_page.dart';
-import 'package:heart_guard/history_page.dart';
-import 'package:heart_guard/settings_page.dart';
+import 'models.dart';
+import 'storage.dart';
+import 'contacts_page.dart';
+import 'history_page.dart';
+import 'settings_page.dart';
+
 class MqttService {
   final String server;
   final int port;
@@ -26,6 +27,7 @@ class MqttService {
       ..logging(on: false)
       ..keepAlivePeriod = 30
       ..autoReconnect = true;
+
     _client.onConnected = () => debugPrint('MQTT conectado');
     _client.onDisconnected = () => debugPrint('MQTT desconectado');
     _client.onSubscribed = (t) => debugPrint('Suscrito a $t');
@@ -34,7 +36,8 @@ class MqttService {
   Future<void> connect() async {
     _client.connectionMessage = MqttConnectMessage()
         .startClean()
-        .withWillQos(MqttQos.atLeastOnce);
+        .withWillQos(MqttQos.atLeastOnce)
+        .keepAliveFor(30);
 
     try {
       await _client.connect();
@@ -42,11 +45,13 @@ class MqttService {
       _client.disconnect();
       rethrow;
     }
+
     _client.subscribe(topic, MqttQos.atMostOnce);
     _client.updates?.listen((events) {
       final rec = events.first;
       final recMess = rec.payload as MqttPublishMessage;
-      final payload = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
+      final payload =
+          MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
       try {
         final data = HeartData.fromJsonStr(payload);
         _controller.add(data);
@@ -109,6 +114,7 @@ class MonitorPage extends StatefulWidget {
 }
 
 class _MonitorPageState extends State<MonitorPage> {
+  // Ajusta a tu broker/topic de Wokwi
   final String broker = 'test.mosquitto.org';
   final int port = 1883;
   final String topic = 'bracelet/demo2/hr';
@@ -122,8 +128,8 @@ class _MonitorPageState extends State<MonitorPage> {
   // Detección
   Settings s = Settings.defaults();
   int sustain = 0;
-  double? ema;                // baseline con media móvil
-  final alpha = 0.1;          // suavizado EMA
+  double? ema;            // baseline con media móvil exponencial
+  final alpha = 0.1;      // suavizado EMA
   bool simulateCrisis = false;
 
   @override
@@ -145,18 +151,22 @@ class _MonitorPageState extends State<MonitorPage> {
   }
 
   Future<void> _onData(HeartData data) async {
-    // Guardar para historial
+    // Guardar en historial
     await Storage.appendReading(data);
 
-    // EMA baseline
-    ema = (ema == null) ? data.hr.toDouble() : (alpha * data.hr + (1 - alpha) * ema!);
+    // Actualizar baseline (EMA)
+    ema = (ema == null)
+        ? data.hr.toDouble()
+        : (alpha * data.hr + (1 - alpha) * ema!);
 
-    final hrAdj = simulateCrisis ? (data.hr + 40) : data.hr; // simulación local
+    // Simulación de crisis (solo para demo en app)
+    final hrAdj = simulateCrisis ? (data.hr + 40) : data.hr;
+
     final isTachy = hrAdj >= s.tachyThreshold;
     final isSpike = (ema != null) && ((hrAdj - ema!) >= s.spikeDelta);
 
     if (isTachy || isSpike) {
-      sustain += 1; // asumiendo 1 lectura/segundo
+      sustain += 1; // asumiendo 1 lectura/segundo desde Wokwi
       if (sustain >= s.sustainSeconds) {
         await _sendAlert(hr: hrAdj);
         sustain = 0;
@@ -170,26 +180,37 @@ class _MonitorPageState extends State<MonitorPage> {
 
   Future<void> _sendAlert({required int hr}) async {
     final contacts = await Storage.loadContacts();
-    final body = 'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
+    final body =
+        'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
     String recipients = '';
+
     if (contacts.isNotEmpty) {
-      final phones = contacts.map((c) => c.phone.trim()).where((p) => p.isNotEmpty).toList();
+      final phones = contacts
+          .map((c) => c.phone.trim())
+          .where((p) => p.isNotEmpty)
+          .toList();
       if (phones.isNotEmpty) {
-        final sep = Platform.isIOS ? ';' : ','; // iOS usa ';' entre destinatarios
+        final sep = Platform.isIOS ? ';' : ','; // separador iOS/Android
         recipients = phones.join(sep);
       }
     }
+
     final uriStr = recipients.isEmpty
         ? 'sms:?body=${Uri.encodeComponent(body)}'
         : 'sms:$recipients?body=${Uri.encodeComponent(body)}';
     final uri = Uri.parse(uriStr);
+
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Se abrió Mensajes con la alerta.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Se abrió Mensajes con la alerta.')),
+      );
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo abrir SMS.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir SMS.')),
+      );
     }
   }
 
@@ -227,37 +248,62 @@ class _MonitorPageState extends State<MonitorPage> {
               Row(
                 children: [
                   Chip(
-                    label: Text(connected ? 'Conectado' : status, style: const TextStyle(color: Colors.white)),
+                    label: Text(
+                      connected ? 'Conectado' : status,
+                      style: const TextStyle(color: Colors.white),
+                    ),
                     backgroundColor: connected ? Colors.green : Colors.grey,
                   ),
                   const Spacer(),
-                  SwitchListTile.adaptive(
-                    value: simulateCrisis,
-                    onChanged: (v) => setState(() => simulateCrisis = v),
-                    title: const Text('Simular crisis'),
-                    contentPadding: EdgeInsets.zero,
+                  // Opción A: Text + Switch (evita "infinite width" en Row)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Simular crisis'),
+                      const SizedBox(width: 8),
+                      Switch.adaptive(
+                        value: simulateCrisis,
+                        onChanged: (v) => setState(() => simulateCrisis = v),
+                      ),
+                    ],
                   ),
                 ],
               ),
+              const SizedBox(height: 8),
               Card(
                 elevation: 2,
                 child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Column(
                     children: [
-                      Text('Frecuencia cardiaca', style: Theme.of(context).textTheme.titleLarge),
+                      Text('Frecuencia cardiaca',
+                          style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 8),
-                      Text(hr == null ? '--' : '$hr bpm',
-                          style: Theme.of(context).textTheme.displayMedium?.copyWith(color: hrColor, fontWeight: FontWeight.bold)),
+                      Text(
+                        hr == null ? '--' : '$hr bpm',
+                        style: Theme.of(context)
+                            .textTheme
+                            .displayMedium
+                            ?.copyWith(
+                                color: hrColor, fontWeight: FontWeight.bold),
+                      ),
                       const SizedBox(height: 12),
-                      Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                        const Icon(Icons.battery_full),
-                        const SizedBox(width: 8),
-                        Text('Batería (sim.): ${batt == null ? '--' : '${(batt * 100).toStringAsFixed(0)}%'}'),
-                      ]),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.battery_full),
+                          const SizedBox(width: 8),
+                          Text('Batería (sim.): '
+                              '${batt == null ? '--' : '${(batt * 100).toStringAsFixed(0)}%'}'),
+                        ],
+                      ),
                       const SizedBox(height: 8),
-                      Text('Umbral: ≥ ${s.tachyThreshold} bpm · Spike: +${s.spikeDelta} bpm vs baseline · Sostenido ${s.sustainSeconds}s',
-                          style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        'Umbral: ≥ ${s.tachyThreshold} bpm · '
+                        'Spike: +${s.spikeDelta} bpm vs baseline · '
+                        'Sostenido ${s.sustainSeconds}s',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
                 ),
@@ -269,7 +315,8 @@ class _MonitorPageState extends State<MonitorPage> {
                     child: FilledButton.icon(
                       icon: const Icon(Icons.sms_failed_outlined),
                       label: const Text('Enviar alerta ahora'),
-                      onPressed: hr == null ? null : () => _sendAlert(hr: hr),
+                      onPressed:
+                          hr == null ? null : () => _sendAlert(hr: hr),
                     ),
                   ),
                 ],
@@ -279,7 +326,8 @@ class _MonitorPageState extends State<MonitorPage> {
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Text(
-                    'Tip: publica JSON {"hr":78,"batt":0.72,"ts":${DateTime.now().millisecondsSinceEpoch}} en $topic vía $broker:$port.\n'
+                    'Tip: publica JSON {"hr":78,"batt":0.72,"ts":${DateTime.now().millisecondsSinceEpoch}} '
+                    'en $topic vía $broker:$port.\n'
                     'La app guarda historial y calcula promedio diario/semanal.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
