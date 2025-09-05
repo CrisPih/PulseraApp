@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter/services.dart';
 
 import 'models.dart';
 import 'storage.dart';
@@ -151,22 +152,25 @@ class _MonitorPageState extends State<MonitorPage> {
   }
 
   Future<void> _onData(HeartData data) async {
-    // Guardar en historial
-    await Storage.appendReading(data);
+    // 1) Timestamp real
+    final nowTs = DateTime.now().millisecondsSinceEpoch;
 
-    // Actualizar baseline (EMA)
-    ema = (ema == null)
-        ? data.hr.toDouble()
-        : (alpha * data.hr + (1 - alpha) * ema!);
-
-    // Simulación de crisis (solo para demo en app)
+    // 2) Simulación de crisis para la lógica
     final hrAdj = simulateCrisis ? (data.hr + 40) : data.hr;
+
+    // 3) Guarda lo que ves en pantalla (hr ajustado) con timestamp real
+    await Storage.appendReading(
+      HeartData(hr: hrAdj, batt: data.batt, ts: nowTs),
+    );
+
+    // 4) EMA/baseline con el valor que estás mostrando
+    ema = (ema == null) ? hrAdj.toDouble() : (alpha * hrAdj + (1 - alpha) * ema!);
 
     final isTachy = hrAdj >= s.tachyThreshold;
     final isSpike = (ema != null) && ((hrAdj - ema!) >= s.spikeDelta);
 
     if (isTachy || isSpike) {
-      sustain += 1; // asumiendo 1 lectura/segundo desde Wokwi
+      sustain += 1; // asumiendo 1 lectura/seg
       if (sustain >= s.sustainSeconds) {
         await _sendAlert(hr: hrAdj);
         sustain = 0;
@@ -175,43 +179,56 @@ class _MonitorPageState extends State<MonitorPage> {
       sustain = 0;
     }
 
-    setState(() => last = HeartData(hr: hrAdj, batt: data.batt, ts: data.ts));
+    setState(() => last = HeartData(hr: hrAdj, batt: data.batt, ts: nowTs));
   }
-
+  
   Future<void> _sendAlert({required int hr}) async {
     final contacts = await Storage.loadContacts();
-    final body =
-        'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
-    String recipients = '';
+    final body = 'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
 
-    if (contacts.isNotEmpty) {
-      final phones = contacts
-          .map((c) => c.phone.trim())
-          .where((p) => p.isNotEmpty)
-          .toList();
-      if (phones.isNotEmpty) {
-        final sep = Platform.isIOS ? ';' : ','; // separador iOS/Android
-        recipients = phones.join(sep);
-      }
-    }
+    // Construir destinatarios (Android usa coma, iOS suele aceptar ';')
+    final phones = contacts.map((c) => c.phone.trim()).where((p) => p.isNotEmpty).toList();
+    final recipients = phones.join(',');
 
-    final uriStr = recipients.isEmpty
+    final uri = Uri.parse(
+      recipients.isEmpty
         ? 'sms:?body=${Uri.encodeComponent(body)}'
-        : 'sms:$recipients?body=${Uri.encodeComponent(body)}';
-    final uri = Uri.parse(uriStr);
+        : 'sms:$recipients?body=${Uri.encodeComponent(body)}',
+    );
 
     if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Se abrió Mensajes con la alerta.')),
       );
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir SMS.')),
-      );
+      return;
     }
+
+    // Fallback si no hay app de SMS (emulador)
+    await Clipboard.setData(ClipboardData(text: body));
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('No hay app de SMS'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Copié el texto de alerta al portapapeles.'),
+            const SizedBox(height: 8),
+            Text(body, style: const TextStyle(fontStyle: FontStyle.italic)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

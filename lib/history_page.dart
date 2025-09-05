@@ -40,12 +40,11 @@ class _HistoryPageState extends State<HistoryPage> {
     // Últimos 7 días
     final now = DateTime.now();
     final sevenAgo = now.subtract(const Duration(days: 7));
-    final lastWeek = data.where((d) =>
-        DateTime.fromMillisecondsSinceEpoch(d.ts).isAfter(sevenAgo));
+    final lastWeek = data.where(
+      (d) => DateTime.fromMillisecondsSinceEpoch(d.ts).isAfter(sevenAgo),
+    );
     final list = lastWeek.map((e) => e.hr).toList();
-    weeklyAvg = list.isEmpty
-        ? 0
-        : list.reduce((a, b) => a + b) / list.length;
+    weeklyAvg = list.isEmpty ? 0 : list.reduce((a, b) => a + b) / list.length;
 
     setState(() {});
   }
@@ -54,6 +53,33 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget build(BuildContext context) {
     final points = dailyAvg.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
+
+    // Genera spots y calcula min/max con colchón para series planas
+    final spots = List.generate(
+      points.length,
+      (i) => FlSpot(i.toDouble(), points[i].value),
+    );
+
+    double? minY;
+    double? maxY;
+    if (spots.isNotEmpty) {
+      // calcula min/max sin importar dart:math
+      minY = spots.first.y;
+      maxY = spots.first.y;
+      for (final s in spots) {
+        if (s.y < minY!) minY = s.y;
+        if (s.y > maxY!) maxY = s.y;
+      }
+      // evita rango cero (serie plana) y añade un pequeño padding
+      if ((maxY! - minY!).abs() < 1e-6) {
+        minY = minY! - 5;
+        maxY = maxY! + 5;
+      } else {
+        minY = minY! - 3;
+        maxY = maxY! + 3;
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Historial')),
       body: Padding(
@@ -63,7 +89,9 @@ class _HistoryPageState extends State<HistoryPage> {
             Card(
               child: ListTile(
                 title: const Text('Promedio semanal (últimos 7 días)'),
-                subtitle: Text(weeklyAvg == 0 ? '--' : '${weeklyAvg.toStringAsFixed(1)} bpm'),
+                subtitle: Text(
+                  weeklyAvg == 0 ? '--' : '${weeklyAvg.toStringAsFixed(1)} bpm',
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -73,35 +101,55 @@ class _HistoryPageState extends State<HistoryPage> {
                   padding: const EdgeInsets.all(12),
                   child: points.isEmpty
                       ? const Center(child: Text('Sin datos suficientes'))
-                      : LineChart(LineChartData(
-                          gridData: FlGridData(show: true),
-                          titlesData: FlTitlesData(
-                            bottomTitles: AxisTitles(
-                              sideTitles: SideTitles(
-                                showTitles: true,
-                                interval: 1,
-                                getTitlesWidget: (v, meta) {
-                                  final i = v.toInt();
-                                  if (i < 0 || i >= points.length) return const SizedBox.shrink();
-                                  final dt = points[i].key;
-                                  return Text('${dt.month}/${dt.day}', style: const TextStyle(fontSize: 10));
-                                },
+                      : LineChart(
+                          LineChartData(
+                            minX: 0,
+                            maxX: (spots.length - 1).toDouble(),
+                            minY: minY,
+                            maxY: maxY,
+                            gridData: FlGridData(show: true),
+                            titlesData: FlTitlesData(
+                              bottomTitles: AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  interval: 1,
+                                  getTitlesWidget: (v, meta) {
+                                    final i = v.toInt();
+                                    if (i < 0 || i >= points.length) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final dt = points[i].key;
+                                    return Text(
+                                      '${dt.month}/${dt.day}',
+                                      style: const TextStyle(fontSize: 10),
+                                    );
+                                  },
+                                ),
+                              ),
+                              leftTitles: const AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  reservedSize: 32,
+                                ),
+                              ),
+                              rightTitles: const AxisTitles(
+                                sideTitles: SideTitles(showTitles: false),
+                              ),
+                              topTitles: const AxisTitles(
+                                sideTitles: SideTitles(showTitles: false),
                               ),
                             ),
-                            leftTitles: AxisTitles(
-                              sideTitles: SideTitles(showTitles: true, reservedSize: 28),
-                            ),
+                            lineBarsData: [
+                              LineChartBarData(
+                                isCurved: true,
+                                spots: spots,
+                                dotData:
+                                    FlDotData(show: spots.length <= 2), // puntos si hay pocos
+                                barWidth: 3,
+                              ),
+                            ],
                           ),
-                          lineBarsData: [
-                            LineChartBarData(
-                              isCurved: true,
-                              spots: List.generate(points.length, (i) =>
-                                  FlSpot(i.toDouble(), points[i].value)),
-                              dotData: FlDotData(show: false),
-                              barWidth: 3,
-                            ),
-                          ],
-                        )),
+                        ),
                 ),
               ),
             ),
