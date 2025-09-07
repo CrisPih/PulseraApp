@@ -3,7 +3,7 @@
 Un proyecto que simula leer los latidos del corazón y manda estos datos a una app que fue desarrollada usando flutter en dart, recibe los dato de una ESP32 que simula ser una pulsera.
 ## CODIGO DE WOKWI
 
-- [Debes primero ingresar a wokwi y escoger que quieres simular en una "ESP32"]([https://wokwi.com/esp32])
+- Debes primero ingresar a wokwi y escoger que quieres simular en una "ESP32"([https://wokwi.com/esp32])
 
 *A continuación copia y pega el siguiente código:*
 
@@ -78,5 +78,5 @@ void loop() {
 
 ## APK
 Una vez puesto el codigo en Wokwi le das a run, y usas la siguiente apk para recibir los datos
-- [Link de la apk]([https://drive.google.com/file/d/1FcT2mEUYHXF4tdXrAD_di71Lzw845xEW/view?usp=drive_link])
+- Link de la apk ([https://drive.google.com/file/d/1FcT2mEUYHXF4tdXrAD_di71Lzw845xEW/view?usp=drive_link])
 
