@@ -17,10 +17,10 @@ class _HistoryPageState extends State<HistoryPage> {
   Map<DateTime, double> dailyAvg = {};
   double weeklyAvg = 0;
 
-  // --- NUEVO: modo demo por buckets ---
+  // Modo demo por buckets
   ViewMode mode = ViewMode.daily;
-  final int bucketSize = 5;      // 5 lecturas = 1 “día” demo
-  final int maxBuckets = 30;     // límite de puntos para no saturar
+  final int bucketSize = 5;   // 5 lecturas = 1 “día” demo
+  final int maxBuckets = 30;  // límite de puntos para no saturar
 
   @override
   void initState() {
@@ -44,7 +44,7 @@ class _HistoryPageState extends State<HistoryPage> {
         e.key: (e.value.reduce((a, b) => a + b) / e.value.length)
     };
 
-    // Últimos 7 días (para el “Promedio semanal”)
+    // Últimos 7 días (para tarjeta “Promedio semanal”)
     final now = DateTime.now();
     final sevenAgo = now.subtract(const Duration(days: 7));
     final lastWeek = data.where(
@@ -56,8 +56,7 @@ class _HistoryPageState extends State<HistoryPage> {
     setState(() {});
   }
 
-  // --- NUEVO: genera puntos según el modo seleccionado ---
-  // Retorna pares (label, value) ya ordenados
+  // Serie para graficar según el modo
   List<MapEntry<String, double>> _buildSeries() {
     if (mode == ViewMode.daily) {
       final entries = dailyAvg.entries.toList()
@@ -67,8 +66,8 @@ class _HistoryPageState extends State<HistoryPage> {
           .toList();
     }
 
-    // Buckets (modo demo): cada bucketSize lecturas = 1 punto
-    if (data.isEmpty) return const [];
+    if (data.isEmpty) return const <MapEntry<String, double>>[];
+    // Buckets (cada N lecturas = 1 punto)
     final vals = data.map((e) => e.hr.toDouble()).toList();
     final buckets = <double>[];
     for (int i = 0; i < vals.length; i += bucketSize) {
@@ -77,11 +76,10 @@ class _HistoryPageState extends State<HistoryPage> {
       final avg = slice.reduce((a, b) => a + b) / slice.length;
       buckets.add(avg);
     }
-    // Limita la serie a los últimos maxBuckets
+    // Mantén los últimos maxBuckets
     final start = buckets.length > maxBuckets ? buckets.length - maxBuckets : 0;
     final trimmed = buckets.sublist(start);
 
-    // Etiquetas “D1, D2, …” (simulan días)
     return List.generate(
       trimmed.length,
       (i) => MapEntry('D${i + 1}', trimmed[i]),
@@ -92,29 +90,86 @@ class _HistoryPageState extends State<HistoryPage> {
   Widget build(BuildContext context) {
     final series = _buildSeries();
 
-    // Scaffold con selector de modo y tarjeta de promedio semanal
     return Scaffold(
-      appBar: AppBar(title: const Text('Historial')),
+      appBar: AppBar(
+        title: const Text('Historial'),
+        actions: [
+          IconButton(
+            tooltip: 'Borrar historial',
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: () async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text('Borrar historial'),
+                  content: const Text('Esto eliminará todas las lecturas guardadas. ¿Continuar?'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Borrar')),
+                  ],
+                ),
+              );
+              if (ok == true) {
+                await Storage.clearReadings();
+                setState(() {
+                  data = [];
+                  dailyAvg = {};
+                  weeklyAvg = 0;
+                });
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Historial borrado')),
+                );
+              }
+            },
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // Selector de vista
-            Row(
-              children: [
-                const Text('Vista:'),
-                const SizedBox(width: 8),
-                SegmentedButton<ViewMode>(
-                  segments: const [
-                    ButtonSegment(value: ViewMode.daily, label: Text('Diario (real)')),
-                    ButtonSegment(value: ViewMode.buckets, label: Text('Demo (cada N lecturas)')),
+            // Selector de vista (compacto, adaptable y desplazable)
+            SizedBox(
+              height: 36,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    const Text('Vista:'),
+                    const SizedBox(width: 8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 320),
+                      child: SizedBox(
+                        height: 30,
+                        child: SegmentedButton<ViewMode>(
+                          segments: const [
+                            ButtonSegment(value: ViewMode.daily, label: Text('Diario')),
+                            ButtonSegment(value: ViewMode.buckets, label: Text('Demo')),
+                          ],
+                          selected: {mode},
+                          onSelectionChanged: (s) => setState(() => mode = s.first),
+                          style: ButtonStyle(
+                            visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            padding: const MaterialStatePropertyAll(
+                              EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            ),
+                            minimumSize: const MaterialStatePropertyAll(Size(0, 26)),
+                            textStyle: const MaterialStatePropertyAll(TextStyle(fontSize: 11)),
+                            shape: MaterialStatePropertyAll(
+                              RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ],
-                  selected: {mode},
-                  onSelectionChanged: (s) => setState(() => mode = s.first),
                 ),
-              ],
+              ),
             ),
             const SizedBox(height: 12),
+
             Card(
               child: ListTile(
                 title: const Text('Promedio semanal (últimos 7 días)'),
@@ -142,13 +197,12 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Widget _buildChart(List<MapEntry<String, double>> series) {
-    // FlSpots
     final spots = List.generate(
       series.length,
       (i) => FlSpot(i.toDouble(), series[i].value),
     );
 
-    // min/max con padding (maneja series planas)
+    // min/max con padding y redondeo a múltiplos de 5
     late double minY;
     late double maxY;
     minY = spots.first.y;
@@ -164,6 +218,10 @@ class _HistoryPageState extends State<HistoryPage> {
       minY -= 3;
       maxY += 3;
     }
+    double _down5(double x) => (x / 5).floor() * 5;
+    double _up5(double x) => (x / 5).ceil() * 5;
+    minY = _down5(minY);
+    maxY = _up5(maxY);
 
     return LineChart(
       LineChartData(
@@ -182,21 +240,24 @@ class _HistoryPageState extends State<HistoryPage> {
                 if (i < 0 || i >= series.length) return const SizedBox.shrink();
                 return Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    series[i].key,
-                    style: const TextStyle(fontSize: 10),
-                  ),
+                  child: Text(series[i].key, style: const TextStyle(fontSize: 10)),
                 );
               },
             ),
           ),
-          leftTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: true, reservedSize: 32),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 32,
+              interval: 5, // ticks cada 5 bpm
+            ),
           ),
-          rightTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
         ),
         lineBarsData: [
           LineChartBarData(

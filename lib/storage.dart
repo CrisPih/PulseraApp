@@ -49,6 +49,12 @@ class Storage {
     return Settings.fromMap(jsonDecode(raw));
   }
 
+  static Future<void> clearReadings() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_kReadings);
+  }
+
+
   static Future<void> saveSettings(Settings s) async {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kSettings, jsonEncode(s.toMap()));

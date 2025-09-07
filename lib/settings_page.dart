@@ -32,11 +32,22 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _vibeCalm() async {
-    // Patrón 4-4-4 (inhalar-sostener-exhalar) con vibración breve al inicio
-    if (await Vibration.hasVibrator()) {
-      await Vibration.vibrate(duration: 200);
+    try {
+      final hasVibrator = (await Vibration.hasVibrator()) ?? false;
+      if (!hasVibrator) return;
+
+      // Si el dispositivo soporta control de amplitud, úsalo
+      final hasAmp = (await Vibration.hasAmplitudeControl()) ?? false;
+      if (hasAmp) {
+        await Vibration.vibrate(duration: 200, amplitude: 128); // 1–255
+      } else {
+        await Vibration.vibrate(duration: 200);
+      }
+    } catch (_) {
+      // Silencia errores si no hay vibrador (ej: emulador)
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

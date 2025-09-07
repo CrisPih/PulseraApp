@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:mqtt_client/mqtt_client.dart';
 import 'package:mqtt_client/mqtt_server_client.dart';
@@ -11,6 +10,7 @@ import 'storage.dart';
 import 'contacts_page.dart';
 import 'history_page.dart';
 import 'settings_page.dart';
+import 'sms_sender.dart';
 
 class MqttService {
   final String server;
@@ -133,6 +133,12 @@ class _MonitorPageState extends State<MonitorPage> {
   final alpha = 0.1;      // suavizado EMA
   bool simulateCrisis = false;
 
+  // --- Envío silencioso por SMS (requiere permiso SEND_SMS) ---
+  final SmsSender sms = SmsSender();
+  DateTime? _lastSilentSent;
+  final Duration _minInterval = const Duration(seconds: 60); // anti-spam
+  bool _sentOnToggle = false; // para disparo único al activar el switch
+
   @override
   void initState() {
     super.initState();
@@ -144,11 +150,21 @@ class _MonitorPageState extends State<MonitorPage> {
       setState(() => status = 'Error de conexión: $e');
     });
     _loadSettings();
+    _prepareSms(); // pedir permiso SMS al iniciar
   }
 
   Future<void> _loadSettings() async {
     s = await Storage.loadSettings();
     setState(() {});
+  }
+
+  Future<void> _prepareSms() async {
+    final ok = await sms.ensurePermission();
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Permiso SMS denegado. No se enviarán alertas silenciosas.')),
+      );
+    }
   }
 
   Future<void> _onData(HeartData data) async {
@@ -172,7 +188,10 @@ class _MonitorPageState extends State<MonitorPage> {
     if (isTachy || isSpike) {
       sustain += 1; // asumiendo 1 lectura/seg
       if (sustain >= s.sustainSeconds) {
-        await _sendAlert(hr: hrAdj);
+        // Envío silencioso al cumplirse la crisis sostenida
+        await _sendSilentSms(hr: hrAdj);
+        // (Opcional) además abrir el composer clásico:
+        // await _sendAlert(hr: hrAdj);
         sustain = 0;
       }
     } else {
@@ -181,7 +200,43 @@ class _MonitorPageState extends State<MonitorPage> {
 
     setState(() => last = HeartData(hr: hrAdj, batt: data.batt, ts: nowTs));
   }
-  
+
+  Future<void> _sendSilentSms({required int hr}) async {
+    final contacts = await Storage.loadContacts();
+    final phones = contacts.map((c) => c.phone.trim()).where((p) => p.isNotEmpty).toList();
+    if (phones.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay contactos de emergencia configurados.')),
+      );
+      return;
+    }
+
+    // Anti-spam: respeta un intervalo mínimo entre envíos
+    final now = DateTime.now();
+    if (_lastSilentSent != null && now.difference(_lastSilentSent!) < _minInterval) {
+      return;
+    }
+
+    final body = 'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda.';
+    try {
+      // Envía a todos los contactos (o limita al primero si prefieres)
+      for (final p in phones) {
+        await sms.sendSilent(to: p, body: body);
+      }
+      _lastSilentSent = now;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alerta enviada por SMS (silencioso)')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error al enviar SMS: $e')),
+      );
+    }
+  }
+
   Future<void> _sendAlert({required int hr}) async {
     final contacts = await Storage.loadContacts();
     final body = 'ALERTA HeartGuard: pulso alto ($hr bpm). Necesito ayuda. (Demo)';
@@ -272,7 +327,7 @@ class _MonitorPageState extends State<MonitorPage> {
                     backgroundColor: connected ? Colors.green : Colors.grey,
                   ),
                   const Spacer(),
-                  // Opción A: Text + Switch (evita "infinite width" en Row)
+                  // Text + Switch (evita overflow en Row)
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -280,7 +335,18 @@ class _MonitorPageState extends State<MonitorPage> {
                       const SizedBox(width: 8),
                       Switch.adaptive(
                         value: simulateCrisis,
-                        onChanged: (v) => setState(() => simulateCrisis = v),
+                        onChanged: (v) async {
+                          setState(() {
+                            simulateCrisis = v;
+                            if (!v) _sentOnToggle = false; // al apagar, rearmamos
+                          });
+                          // Disparo inmediato al activar modo crisis
+                          if (v && !_sentOnToggle) {
+                            final hrNow = last?.hr ?? (s.tachyThreshold + s.spikeDelta);
+                            await _sendSilentSms(hr: hrNow);
+                            _sentOnToggle = true;
+                          }
+                        },
                       ),
                     ],
                   ),
