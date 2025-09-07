@@ -33,18 +33,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _vibeCalm() async {
     try {
-      final hasVibrator = (await Vibration.hasVibrator()) ?? false;
-      if (!hasVibrator) return;
+      if ((await Vibration.hasVibrator()) != true) return;
 
-      // Si el dispositivo soporta control de amplitud, úsalo
-      final hasAmp = (await Vibration.hasAmplitudeControl()) ?? false;
+      final hasAmp = (await Vibration.hasAmplitudeControl()) == true;
       if (hasAmp) {
-        await Vibration.vibrate(duration: 200, amplitude: 128); // 1–255
+        await Vibration.vibrate(duration: 200, amplitude: 128);
       } else {
         await Vibration.vibrate(duration: 200);
       }
     } catch (_) {
-      // Silencia errores si no hay vibrador (ej: emulador)
+      // sin vibrador / emulador: ignorar
     }
   }
 
