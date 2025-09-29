@@ -4,9 +4,12 @@ Un proyecto que simula leer los latidos del corazón y manda estos datos a una a
 ## CODIGO DE WOKWI
 
 - Debes primero ingresar a wokwi y escoger que quieres simular en una "ESP32"([https://wokwi.com/esp32])
-- Agregar en la pestaña de ~library manager~ "PubSubClient"
+- Agregar en la pestaña de _library manager_ lo siguiente:
+```
+  PubSubClient
+```
 
-*A continuación copia y pega el siguiente código en la pestaña de ~sketch.ino~:*
+*A continuación copia y pega el siguiente código en la pestaña de _sketch.ino_:*
 
 ```
 #include <WiFi.h>
