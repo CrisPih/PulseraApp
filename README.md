@@ -3,7 +3,7 @@
 Un proyecto que simula leer los latidos del corazón y manda estos datos a una app que fue desarrollada usando flutter en dart, recibe los dato de una ESP32 que simula ser una pulsera.
 ## CODIGO DE WOKWI
 
-- Debes primero ingresar a wokwi y escoger que quieres simular en una "ESP32"([https://wokwi.com/esp32])
+- Debes primero ingresar a wokwi y escoger que quieres simular en una "ESP32" en la sección de Starter Templates. (https://wokwi.com/esp32)
 - Agregar en la pestaña de _library manager_ lo siguiente:
 ```
   PubSubClient
